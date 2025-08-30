@@ -1,5 +1,11 @@
 from pathlib import Path
-from typing import List
+from typing import List, Dict
+from PIL import Image
+import math
+import argparse
+
+from captioner import Captioner
+from renderer import render_meme
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 OUTPUT_DIR = Path(__file__).parent / "outputs"
@@ -33,9 +39,28 @@ def score_caption(c: Dict[str, str]) -> float:
 
     def word_count(s): 
         return max(1, len(s.split()))
-    
+
     tl = word_count(t)
     bl = word_count(b)
     length_score = math.exp(-((tl-6)**2 + (bl-6)**2) / 20)  # peak near ~6 words each
     diversity = 1.0 if t.strip().lower() != b.strip().lower() else 0.5
     return length_score * diversity
+
+def generate_meme(topic: str, model_name: str | None = None) -> str:
+    cap = Captioner(model_name=model_name)
+    candidates = cap.generate(topic, n=4)
+    candidates.sort(key=score_caption, reverse=True)
+    best = candidates[0]
+    template = pick_template(topic)
+    out_path = OUTPUT_DIR / f"meme_{topic.replace(' ', '_')}.jpg"
+    render_meme(template, best["top"], best["bottom"], str(out_path))
+    return str(out_path)
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--topic", type=str, required=True, help="Meme topic, e.g., 'deadline at 5pm'")
+    ap.add_argument("--model", type=str, default=None, help="Optional HF model name for captions")
+    args = ap.parse_args()
+
+    out = generate_meme(args.topic, model_name=args.model)
+    print(f"Saved: {out}")
