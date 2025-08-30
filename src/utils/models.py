@@ -36,6 +36,6 @@ def score_caption(c: Dict[str, str]) -> float:
     
     tl = word_count(t)
     bl = word_count(b)
-        length_score = math.exp(-((tl-6)**2 + (bl-6)**2) / 20)  # peak near ~6 words each
-        diversity = 1.0 if t.strip().lower() != b.strip().lower() else 0.5
-        return length_score * diversity
+    length_score = math.exp(-((tl-6)**2 + (bl-6)**2) / 20)  # peak near ~6 words each
+    diversity = 1.0 if t.strip().lower() != b.strip().lower() else 0.5
+    return length_score * diversity
