@@ -6,6 +6,6 @@ def run_meme_pipeline(template, caption_top, caption_bottom):
         template_path=template,
         top_text=caption_top,
         bottom_text=caption_bottom,
-        
+        output_path="outputs/final_meme.jpg"
     )
     return output_file
