@@ -9,4 +9,4 @@ def test_meme_generator():
         bottom_text="Bottom Caption",
         output_path="tests/test_meme.jpg"
     )
-    
+    assert os.path.exists(output_file)
