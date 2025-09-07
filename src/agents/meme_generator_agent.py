@@ -20,6 +20,40 @@ class GenReq(BaseModel):
     backend: str | None = None
     template_url: str | None = None
 
+
+async def _gen_imgflip(req: GenReq) -> dict | None:
+    if not req.template_id.isdigit():
+        return None
+    payload = {
+        "template_id": req.template_id,
+        "username": IMGFLIP_USER,
+        "password": IMGFLIP_PASS,
+        "text0": req.top_text,
+        "text1": req.bottom_text,
+    }
+    async with httpx.AsyncClient(timeout=30) as client:
+        j = (await client.post("https://api.imgflip.com/caption_image", data=payload)).json()
+    if j.get("success") and j.get("data", {}).get("url"):
+        return {"meme_url": j["data"]["url"]}
+    return None
+
+
+async def _gen_memegen(req: GenReq) -> dict | None:
+    tid = req.template_id
+    if not (tid.startswith("memegen:") or tid.startswith("memegen_ex:")):
+        return None
+
+    def fmt(s: str) -> str:
+        s = (s or "").strip() or "_"
+        return quote(s, safe="").replace("%20", "_")
+
+    if tid.startswith("memegen:"):
+        slug = tid.split(":", 1)[1]
+        url = f"https://api.memegen.link/images/{slug}/{fmt(req.top_text)}/{fmt(req.bottom_text)}.png"
+    else:
+        bg = tid.split(":", 1)[1]
+        url = f"https://api.memegen.link/images/custom/{fmt(req.top_text)}/{fmt(req.bottom_text)}.png?background={quote(bg, safe='')}"
+    return {"meme_url": url}
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
