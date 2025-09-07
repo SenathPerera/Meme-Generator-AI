@@ -6,8 +6,19 @@ from PIL import Image, ImageDraw, ImageFont
 from urllib.parse import quote
 import requests
 
-from captioner import Captioner
-from renderer import render_meme
+
+app = FastAPI(title="Meme Generation Agent", version="2.1")
+
+@app.get("/meme-generator")
+async def meme_generator_status():
+    return {"status": "ok", "agent": "meme_generator"}
+
+class GenReq(BaseModel):
+    template_id: str
+    top_text: str = ""
+    bottom_text: str = ""
+    backend: str | None = None
+    template_url: str | None = None
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 OUTPUT_DIR = Path(__file__).parent / "outputs"
