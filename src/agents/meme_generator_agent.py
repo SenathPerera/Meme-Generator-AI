@@ -110,6 +110,34 @@ async def _gen_local(req: GenReq) -> dict | None:
             pass
 
     return {"meme_url": f"file://{fname.as_posix()}"}
+
+@app.post("/generate_meme")
+async def generate_meme(req: GenReq):
+    """
+    Tries backends in order (or force via req.backend):
+      1) Imgflip (numeric template_id)
+      2) Memegen.link (template_id 'memegen:<slug>' or 'memegen_ex:<url>')
+      3) Local Pillow (template_url or URL template_id)
+    """
+    order = ["imgflip", "memegen", "local"] if not req.backend else [req.backend]
+
+    for backend in order:
+        try:
+            if backend == "imgflip":
+                res = await _gen_imgflip(req)
+            elif backend == "memegen":
+                res = await _gen_memegen(req)
+            elif backend == "local":
+                res = await _gen_local(req)
+            else:
+                res = None
+            if res and res.get("meme_url"):
+                return res
+        except Exception:
+            continue
+
+    return JSONResponse({"error": "All backends failed"}, status_code=502)
+
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 OUTPUT_DIR = Path(__file__).parent / "outputs"
 OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
