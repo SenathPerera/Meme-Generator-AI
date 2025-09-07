@@ -1,8 +1,10 @@
-from pathlib import Path
-from typing import List, Dict
-from PIL import Image
-import math
-import argparse
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+import httpx, io, time
+from PIL import Image, ImageDraw, ImageFont
+from urllib.parse import quote
+import requests
 
 from captioner import Captioner
 from renderer import render_meme
