@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import asyncio, hashlib, time
 from typing import Optional, Dict
+import re
 
 
 app = FastAPI(title="Security & Compliance Agent", version="1.0")
@@ -33,3 +34,10 @@ class SecureReq(BaseModel):
     action: str                     # idea | templates | search_templates | generate
     payload: Dict[str, str] = {}
 
+
+# security policy part
+HATE = {"racist", "hate", "white power", "ethnic cleansing", "nazi", "nazism"}
+HARASS = {"kill yourself", "idiot", "stupid", "loser", "dumb", "die", "trash human"}
+VIOLENCE = {"shoot", "stab", "bomb", "terror", "attack", "behead"}
+SEXUAL = {"porn", "rape", "nude", "explicit"}
+SELF_HARM = {"self harm", "suicide", "kill myself", "cut myself"}
