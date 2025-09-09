@@ -1,15 +1,35 @@
-
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Dict, Optional
-import httpx, re, time, csv, hashlib, asyncio
-from pathlib import Path
+import asyncio, hashlib, time
+from typing import Optional, Dict
 
 
 app = FastAPI(title="Security & Compliance Agent", version="1.0")
+
+
+RATE_LIMIT = 40            
+RATE_WINDOW = 60          
+_bucket: Dict[str, Dict[str, float]] = {}
+_lock = asyncio.Lock()
+
+def _client_sig(api_key: str, addr: str) -> str:
+    raw = (api_key or "") + "|" + (addr or "0.0.0.0")
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+async def _rate_limit(sig: str) -> bool:
+    now = time.time()
+    async with _lock:
+        rec = _bucket.get(sig, {"count": 0, "reset": now + RATE_WINDOW})
+        if now > rec["reset"]:
+            rec = {"count": 0, "reset": now + RATE_WINDOW}
+        rec["count"] += 1
+        _bucket[sig] = rec
+        return rec["count"] <= RATE_LIMIT
+    
 
 # ---------- Models ----------
 class SecureReq(BaseModel):
     action: str                     # idea | templates | search_templates | generate
     payload: Dict[str, str] = {}
+
