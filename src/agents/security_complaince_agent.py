@@ -59,3 +59,27 @@ POLICY = {
     "sexual_content": SEXUAL,
     "self_harm": SELF_HARM
 }
+
+
+def _violates_policy(text: str):
+    t = (text or "")
+    t_lower = t.lower()
+
+    for pat in BAD_PATTERNS:
+        if re.search(pat, t, flags=re.IGNORECASE):
+            return True, ["malicious_code"]
+
+    categories = []
+    for label, kws in POLICY.items():
+        for kw in kws:
+            kw_re = kw.replace("*", ".*")
+            if re.search(rf"\b{kw_re}\b", t_lower, flags=re.IGNORECASE):
+                categories.append(label)
+                break
+
+    for pat in PII_PATTERNS:
+        if re.search(pat, t):
+            categories.append("pii_leak")
+            break
+
+    return (len(categories) > 0), sorted(set(categories))
