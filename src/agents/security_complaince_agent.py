@@ -41,3 +41,21 @@ HARASS = {"kill yourself", "idiot", "stupid", "loser", "dumb", "die", "trash hum
 VIOLENCE = {"shoot", "stab", "bomb", "terror", "attack", "behead"}
 SEXUAL = {"porn", "rape", "nude", "explicit"}
 SELF_HARM = {"self harm", "suicide", "kill myself", "cut myself"}
+
+BAD_PATTERNS = [
+    r"<\s*script\b", r"onerror\s*=", r"DROP\s+TABLE", r";--", r"UNION\s+SELECT",
+    r"insert\s+into", r"delete\s+from"
+]
+PII_PATTERNS = [
+    r"\b\d{10}\b",
+    r"\b\d{12}\b",
+    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"
+]
+
+POLICY = {
+    "hate_speech": HATE,
+    "harassment": HARASS,
+    "violence": VIOLENCE,
+    "sexual_content": SEXUAL,
+    "self_harm": SELF_HARM
+}
