@@ -113,12 +113,7 @@ async def _gen_local(req: GenReq) -> dict | None:
 
 @app.post("/generate_meme")
 async def generate_meme(req: GenReq):
-    """
-    Tries backends in order (or force via req.backend):
-      1) Imgflip (numeric template_id)
-      2) Memegen.link (template_id 'memegen:<slug>' or 'memegen_ex:<url>')
-      3) Local Pillow (template_url or URL template_id)
-    """
+    
     order = ["imgflip", "memegen", "local"] if not req.backend else [req.backend]
 
     for backend in order:
