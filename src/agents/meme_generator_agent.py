@@ -9,11 +9,6 @@ import requests
 from src.utils.config import IMGFLIP_USER, IMGFLIP_PASS, IMGUR_CLIENT_ID, GENERATED_DIR
 
 
-app = FastAPI(title="Meme Generation Agent", version="2.1")
-
-@app.get("/meme-generator")
-async def meme_generator_status():
-    return {"status": "ok", "agent": "meme_generator"}
 
 class GenReq(BaseModel):
     template_id: str
@@ -22,6 +17,12 @@ class GenReq(BaseModel):
     backend: str | None = None
     template_url: str | None = None
 
+
+app = FastAPI(title="Meme Generation Agent", version="2.1")
+
+@app.get("/meme-generator")
+async def meme_generator_status():
+    return {"status": "ok", "agent": "meme_generator"}
 
 async def _gen_imgflip(req: GenReq) -> dict | None:
     if not req.template_id.isdigit():
