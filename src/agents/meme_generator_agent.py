@@ -134,26 +134,7 @@ async def generate_meme(req: GenReq):
     return JSONResponse({"error": "All backends failed"}, status_code=502)
 
 
-def list_templates() -> list[str]:
-    return [str(p) for p in sorted(TEMPLATES_DIR.glob("*.jpg"))]
 
-def pick_template(topic: str) -> str:
-    # Simple heuristic: choose template by keyword
-    topic_low = (topic or "").lower()
-    mapping = {
-        "choice": "drake.jpg",
-        "approve": "drake.jpg",
-        "distract": "distracted.jpg",
-        "compare": "distracted.jpg",
-        "study": "study.jpg",
-        "work": "study.jpg",
-    }
-    for k, v in mapping.items():
-        if k in topic_low:
-            return str(TEMPLATES_DIR / v)
-    # fallback to first
-    templates = list_templates()
-    return templates[0] if templates else ""
 
 def score_caption(c: Dict[str, str]) -> float:
     # Very simple scoring: prefer medium length and some balance
