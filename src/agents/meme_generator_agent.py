@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw, ImageFont
 from urllib.parse import quote
 import requests
 
+from src.utils.config import IMGFLIP_USER, IMGFLIP_PASS, IMGUR_CLIENT_ID, GENERATED_DIR
 
 
 app = FastAPI(title="Meme Generation Agent", version="2.1")
