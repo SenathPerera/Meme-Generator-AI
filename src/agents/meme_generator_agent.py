@@ -1,9 +1,10 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import httpx, io, time, requests
+import httpx, io, time
 from PIL import Image, ImageDraw, ImageFont
 from urllib.parse import quote
+import requests
 
 
 
