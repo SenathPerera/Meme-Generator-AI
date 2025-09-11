@@ -133,9 +133,6 @@ async def generate_meme(req: GenReq):
 
     return JSONResponse({"error": "All backends failed"}, status_code=502)
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-OUTPUT_DIR = Path(__file__).parent / "outputs"
-OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 
 def list_templates() -> list[str]:
     return [str(p) for p in sorted(TEMPLATES_DIR.glob("*.jpg"))]
