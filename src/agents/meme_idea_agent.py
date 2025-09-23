@@ -1,7 +1,7 @@
 
 import itertools
 import httpx
-
+from fastapi.responses import JSONResponse
 
 
 
@@ -55,6 +55,26 @@ async def _get_from_source(idx: int) -> str | None:
                 return j["slip"]["advice"]
     return None
 
+@app.get("/get_idea")
+async def get_idea():
+    """
+    Tries up to 5 sources in rotating order. Returns the first success.
+    """
+    start_idx = next(_cycle)
+    tries = list((start_idx + i) % len(SOURCES) for i in range(len(SOURCES)))
+    for idx in tries:
+        try:
+            idea = await _get_from_source(idx)
+            if idea:
+                return {"source": SOURCES[idx][0], "idea": idea}
+        except Exception:
+            continue
+
+    # fallback
+    return JSONResponse(
+        {"source": "fallback", "idea": "When the bug disappears right as the lecturer arrives."},
+        status_code=200,
+    )
 
 
 
