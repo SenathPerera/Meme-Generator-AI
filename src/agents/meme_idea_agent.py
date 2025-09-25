@@ -1,6 +1,8 @@
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 import httpx
 import itertools
+from typing import Optional
 
 app = FastAPI(title="Meme Idea Agent", version="2.0")
 
@@ -19,7 +21,7 @@ async def meme_generator_status():
     return {"status": "ok", "agent": "meme_idea", "sources": len(SOURCES)}
 
 
-async def _get_from_source(idx: int):
+async def _get_from_source(idx: int) -> Optional[str]:
     name, url = SOURCES[idx]
     headers = {}
     if name == "icanhazdadjoke":
@@ -31,17 +33,21 @@ async def _get_from_source(idx: int):
         content_type = r.headers.get("Content-Type", "").lower()
         j = r.json() if "application/json" in content_type else None
 
-        if name == "JokeAPI" and j:
-            return j.get("joke") or None
-        if name == "icanhazdadjoke" and j:
-            return j.get("joke") or None
-        if name == "Quotable" and j:
-            return j.get("content") or None
-        if name == "ZenQuotes" and isinstance(j, list) and j:
-            return j[0].get("q") or None
-        if name == "AdviceSlip" and j:
-            slip = j.get("slip") or {}
-            return slip.get("advice") or None
+        if name == "JokeAPI":
+            if j and j.get("type") == "single" and j.get("joke"):
+                return j["joke"]
+        elif name == "icanhazdadjoke":
+            if j and j.get("joke"):
+                return j["joke"]
+        elif name == "Quotable":
+            if j and j.get("content"):
+                return j["content"]
+        elif name == "ZenQuotes":
+            if isinstance(j, list) and j and "q" in j[0]:
+                return j[0]["q"]
+        elif name == "AdviceSlip":
+            if j and j.get("slip", {}).get("advice"):
+                return j["slip"]["advice"]
 
     return None
 
@@ -54,9 +60,15 @@ async def get_idea():
     start_idx = next(_cycle)
     tries = list((start_idx + i) % len(SOURCES) for i in range(len(SOURCES)))
     for idx in tries:
-        idea = await _get_from_source(idx)
-        if idea:
-            return {"source": SOURCES[idx][0], "idea": idea}
+        try:
+            idea = await _get_from_source(idx)
+            if idea:
+                return {"source": SOURCES[idx][0], "idea": idea}
+        except Exception:
+            continue
 
-    # Temporary placeholder; proper fallback coming next
-    return {"source": "fallback", "idea": None}
+    # fallback
+    return JSONResponse(
+        {"source": "fallback", "idea": "When the bug disappears right as the lecturer arrives."},
+        status_code=200,
+    )
