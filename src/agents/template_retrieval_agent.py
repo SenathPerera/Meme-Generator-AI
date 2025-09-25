@@ -134,3 +134,74 @@ async def get_templates(limit: int = Query(12, ge=1, le=50)):
     if not TEMPLATES:
         return JSONResponse({"error": "Template cache empty"}, status_code=502)
     return {"templates": TEMPLATES[:limit]}
+
+
+@app.get("/search_templates")
+async def search_templates(q: str = Query(..., min_length=1), limit: int = Query(12, ge=1, le=50)):
+    """
+    More flexible search:
+    - alias expansion (common nicknames)
+    - substring pass first
+    - fuzzy pass as fallback
+    - searches name + id text (incl. memegen slugs)
+    """
+    await _load_templates()
+    if not TEMPLATES:
+        return JSONResponse({"error": "Template cache empty"}, status_code=502)
+
+    query = q.strip().lower()
+
+    ALIASES = {
+        "drake": "drake hotline bling",
+        "boyfriend": "distracted boyfriend",
+        "distracted": "distracted boyfriend",
+        "one simply": "one does not simply",
+        "two buttons": "two buttons",
+        "doge": "doge",
+        "pikachu": "surprised pikachu",
+        "gru": "gru plan",
+        "brain": "expanding brain",
+        "arthur": "arthur fist",
+        "change my mind": "change my mind",
+        "leo cheers": "leonardo dicaprio cheers",
+        "success kid": "success kid",
+        "spongebob": "mocking spongebob",
+        "patrick": "surprised patrick",
+    }
+    if query in ALIASES:
+        query = ALIASES[query]
+
+    corpus = []
+    for t in TEMPLATES:
+        name = t.get("name", "")
+        tid = t.get("id", "")
+        searchable = f"{name} {tid}".lower()
+        corpus.append((searchable, t))
+
+    subs = [t for (text, t) in corpus if query in text]
+    if subs:
+
+        scored = sorted(
+            [{"id": t["id"], "name": t["name"], "url": t["url"],
+                "score": min(99, 50 + len(query))} for t in subs],
+            key=lambda x: x["score"],
+            reverse=True
+        )[:limit]
+        return {"results": scored}
+
+    from rapidfuzz import process, fuzz
+    names = [f"{t['name']} {t['id']}".lower() for t in TEMPLATES]
+    matches = process.extract(
+        query, names, limit=limit, scorer=fuzz.WRatio, score_cutoff=45)
+
+    out = []
+    for _, score, idx in matches:
+        t = TEMPLATES[idx]
+        out.append({"id": t["id"], "name": t["name"],
+                   "url": t["url"], "score": int(score)})
+
+    if not out:
+        out = [{"id": t["id"], "name": t["name"], "url": t["url"], "score": 40}
+               for t in TEMPLATES[:limit]]
+
+    return {"results": out}
