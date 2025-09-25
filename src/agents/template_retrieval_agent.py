@@ -73,3 +73,15 @@ async def _load_memegen_templates() -> List[Dict]:
             out.append(
                 {"id": f"memegen:{t['id']}", "name": t["name"], "url": t["blank"]})
     return out
+
+
+async def _load_memegen_examples() -> List[Dict]:
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(MEMEGEN_EXAMPLES)
+        j = r.json()
+    out = []
+    for ex in j:
+        if "url" in ex and "name" in ex:
+            out.append(
+                {"id": f"memegen_ex:{ex['url']}", "name": ex["name"], "url": ex["url"]})
+    return out
