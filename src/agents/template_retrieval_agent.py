@@ -37,3 +37,39 @@ def _dedupe(templates: List[Dict]) -> List[Dict]:
             seen.add(key)
             out.append(t)
     return out
+
+
+async def _load_imgflip() -> List[Dict]:
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(IMGFLIP_URL)
+        j = r.json()
+    if j.get("success"):
+        return [{"id": m["id"], "name": m["name"], "url": m["url"]} for m in j["data"]["memes"]]
+    return []
+
+
+async def _load_reddit() -> List[Dict]:
+    async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "Mozilla/5.0"}) as client:
+        r = await client.get(REDDIT_URL)
+        j = r.json()
+    out = []
+    for c in j.get("data", {}).get("children", []):
+        d = c.get("data", {})
+        url = d.get("url_overridden_by_dest") or d.get("url")
+        title = d.get("title")
+        if url and title and (url.endswith(".jpg") or url.endswith(".png") or "i.redd.it" in url):
+            out.append(
+                {"id": url, "name": f"Reddit: {title[:60]}", "url": url})
+    return out
+
+
+async def _load_memegen_templates() -> List[Dict]:
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(MEMEGEN_TEMPLATES)
+        j = r.json()
+    out = []
+    for t in j:
+        if "blank" in t and "name" in t and "id" in t:
+            out.append(
+                {"id": f"memegen:{t['id']}", "name": t["name"], "url": t["blank"]})
+    return out
