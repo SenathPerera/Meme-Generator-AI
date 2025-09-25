@@ -121,3 +121,8 @@ async def _load_templates(force: bool = False):
 @app.on_event("startup")
 async def on_start():
     asyncio.create_task(_load_templates(force=True))
+
+
+@app.get("/meme-generator")
+async def meme_generator_status():
+    return {"status": "ok", "agent": "template_retrieval", "cache_size": len(TEMPLATES)}
