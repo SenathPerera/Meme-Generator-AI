@@ -44,3 +44,19 @@ async def _get_from_source(idx: int):
             return slip.get("advice") or None
 
     return None
+
+
+@app.get("/get_idea")
+async def get_idea():
+    """
+    Tries up to 5 sources in rotating order. Returns the first success.
+    """
+    start_idx = next(_cycle)
+    tries = list((start_idx + i) % len(SOURCES) for i in range(len(SOURCES)))
+    for idx in tries:
+        idea = await _get_from_source(idx)
+        if idea:
+            return {"source": SOURCES[idx][0], "idea": idea}
+
+    # Temporary placeholder; proper fallback coming next
+    return {"source": "fallback", "idea": None}
