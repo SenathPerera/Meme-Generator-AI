@@ -126,3 +126,11 @@ async def on_start():
 @app.get("/meme-generator")
 async def meme_generator_status():
     return {"status": "ok", "agent": "template_retrieval", "cache_size": len(TEMPLATES)}
+
+
+@app.get("/get_templates")
+async def get_templates(limit: int = Query(12, ge=1, le=50)):
+    await _load_templates()
+    if not TEMPLATES:
+        return JSONResponse({"error": "Template cache empty"}, status_code=502)
+    return {"templates": TEMPLATES[:limit]}
