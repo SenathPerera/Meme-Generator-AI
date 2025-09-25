@@ -85,3 +85,34 @@ async def _load_memegen_examples() -> List[Dict]:
             out.append(
                 {"id": f"memegen_ex:{ex['url']}", "name": ex["name"], "url": ex["url"]})
     return out
+
+
+async def _load_templates(force: bool = False):
+    global TEMPLATES, _LAST_LOAD
+    now = time.time()
+    if not force and (now - _LAST_LOAD) < _CACHE_TTL and TEMPLATES:
+        return
+    combined: List[Dict] = []
+
+    try:
+        combined += await _load_imgflip()
+    except Exception:
+        pass
+    try:
+        combined += await _load_reddit()
+    except Exception:
+        pass
+    try:
+        combined += await _load_memegen_templates()
+    except Exception:
+        pass
+    try:
+        combined += await _load_memegen_examples()
+    except Exception:
+        pass
+
+    if not combined:
+        combined = STATIC_FALLBACK.copy()
+
+    TEMPLATES = _dedupe(combined)
+    _LAST_LOAD = now
