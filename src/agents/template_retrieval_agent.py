@@ -116,3 +116,8 @@ async def _load_templates(force: bool = False):
 
     TEMPLATES = _dedupe(combined)
     _LAST_LOAD = now
+
+
+@app.on_event("startup")
+async def on_start():
+    asyncio.create_task(_load_templates(force=True))
