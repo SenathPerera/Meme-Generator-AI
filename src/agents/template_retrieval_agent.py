@@ -26,3 +26,14 @@ STATIC_FALLBACK = [
     {"id": "181913649", "name": "Drake Hotline Bling",
         "url": "https://i.imgflip.com/30b1gx.jpg"},
 ]
+
+
+def _dedupe(templates: List[Dict]) -> List[Dict]:
+    seen = set()
+    out = []
+    for t in templates:
+        key = (t.get("id") or t.get("url"))
+        if key and key not in seen:
+            seen.add(key)
+            out.append(t)
+    return out
