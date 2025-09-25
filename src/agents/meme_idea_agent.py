@@ -28,10 +28,8 @@ async def _get_from_source(idx: int):
     async with httpx.AsyncClient(timeout=15, headers=headers) as client:
         r = await client.get(url)
         r.raise_for_status()
-        try:
-            j = r.json()
-        except Exception:
-            j = None
+        content_type = r.headers.get("Content-Type", "").lower()
+        j = r.json() if "application/json" in content_type else None
 
         if name == "JokeAPI" and j:
             return j.get("joke") or None
