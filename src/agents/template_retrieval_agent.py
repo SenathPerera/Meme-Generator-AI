@@ -1,207 +1,152 @@
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-from typing import List, Dict
-import httpx
-import asyncio
-import time
-from rapidfuzz import process, fuzz
+import requests
+from dataclasses import dataclass
+from typing import List, Dict, Any, Optional
+import numpy as np
 
-app = FastAPI(title="Template Retrieval Agent", version="2.0")
-
-# Unified cache across sources
-TEMPLATES: List[Dict] = []
-_LAST_LOAD = 0.0
-_CACHE_TTL = 60 * 30
+# OpenAI + fallback embeddings
+from src.utils.openai_client import openai_embed, openai_plan_search
+from src.agents.utils_fallbacks import embed_texts as fallback_embed
 
 
-IMGFLIP_URL = "https://api.imgflip.com/get_memes"
-REDDIT_URL = "https://www.reddit.com/r/memes.json?limit=50"
-MEMEGEN_TEMPLATES = "https://api.memegen.link/templates/"
-MEMEGEN_EXAMPLES = "https://api.memegen.link/images/"
-STATIC_FALLBACK = [
-    {"id": "61579", "name": "One Does Not Simply",
-        "url": "https://i.imgflip.com/1bij.jpg"},
-    {"id": "112126428", "name": "Distracted Boyfriend",
-        "url": "https://i.imgflip.com/1ur9b0.jpg"},
-    {"id": "181913649", "name": "Drake Hotline Bling",
-        "url": "https://i.imgflip.com/30b1gx.jpg"},
-]
+@dataclass
+class TemplateItem:
+    id: str
+    name: str
+    url: str
+    source: str
 
 
-def _dedupe(templates: List[Dict]) -> List[Dict]:
-    seen = set()
-    out = []
-    for t in templates:
-        key = (t.get("id") or t.get("url"))
-        if key and key not in seen:
-            seen.add(key)
-            out.append(t)
-    return out
-
-
-async def _load_imgflip() -> List[Dict]:
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(IMGFLIP_URL)
-        j = r.json()
-    if j.get("success"):
-        return [{"id": m["id"], "name": m["name"], "url": m["url"]} for m in j["data"]["memes"]]
-    return []
-
-
-async def _load_reddit() -> List[Dict]:
-    async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "Mozilla/5.0"}) as client:
-        r = await client.get(REDDIT_URL)
-        j = r.json()
-    out = []
-    for c in j.get("data", {}).get("children", []):
-        d = c.get("data", {})
-        url = d.get("url_overridden_by_dest") or d.get("url")
-        title = d.get("title")
-        if url and title and (url.endswith(".jpg") or url.endswith(".png") or "i.redd.it" in url):
-            out.append(
-                {"id": url, "name": f"Reddit: {title[:60]}", "url": url})
-    return out
-
-
-async def _load_memegen_templates() -> List[Dict]:
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(MEMEGEN_TEMPLATES)
-        j = r.json()
-    out = []
-    for t in j:
-        if "blank" in t and "name" in t and "id" in t:
-            out.append(
-                {"id": f"memegen:{t['id']}", "name": t["name"], "url": t["blank"]})
-    return out
-
-
-async def _load_memegen_examples() -> List[Dict]:
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(MEMEGEN_EXAMPLES)
-        j = r.json()
-    out = []
-    for ex in j:
-        if "url" in ex and "name" in ex:
-            out.append(
-                {"id": f"memegen_ex:{ex['url']}", "name": ex["name"], "url": ex["url"]})
-    return out
-
-
-async def _load_templates(force: bool = False):
-    global TEMPLATES, _LAST_LOAD
-    now = time.time()
-    if not force and (now - _LAST_LOAD) < _CACHE_TTL and TEMPLATES:
-        return
-    combined: List[Dict] = []
-
-    try:
-        combined += await _load_imgflip()
-    except Exception:
-        pass
-    try:
-        combined += await _load_reddit()
-    except Exception:
-        pass
-    try:
-        combined += await _load_memegen_templates()
-    except Exception:
-        pass
-    try:
-        combined += await _load_memegen_examples()
-    except Exception:
-        pass
-
-    if not combined:
-        combined = STATIC_FALLBACK.copy()
-
-    TEMPLATES = _dedupe(combined)
-    _LAST_LOAD = now
-
-
-@app.on_event("startup")
-async def on_start():
-    asyncio.create_task(_load_templates(force=True))
-
-
-@app.get("/meme-generator")
-async def meme_generator_status():
-    return {"status": "ok", "agent": "template_retrieval", "cache_size": len(TEMPLATES)}
-
-
-@app.get("/get_templates")
-async def get_templates(limit: int = Query(12, ge=1, le=50)):
-    await _load_templates()
-    if not TEMPLATES:
-        return JSONResponse({"error": "Template cache empty"}, status_code=502)
-    return {"templates": TEMPLATES[:limit]}
-
-
-@app.get("/search_templates")
-async def search_templates(q: str = Query(..., min_length=1), limit: int = Query(12, ge=1, le=50)):
+class TemplateRetrievalAgent:
     """
-    More flexible search:
-    - alias expansion (common nicknames)
-    - substring pass first
-    - fuzzy pass as fallback
-    - searches name + id text (incl. memegen slugs)
+    Retrieves meme templates from multiple APIs, merges, ranks, and returns top-k.
+
+    Planning:
+      - openai_plan_search(context) -> {"search_prompt": "...", "tags": [...]}
+
+    Embeddings:
+      - Primary: OpenAI (paid) via openai_embed
+      - Fallback: Sentence-Transformer / TF-IDF via utils_fallbacks.embed_texts
+
+    Sources:
+      - Imgflip: https://api.imgflip.com/get_memes
+      - Memegen: https://api.memegen.link/templates/
+      - Reddit : https://meme-api.com/gimme/50
     """
-    await _load_templates()
-    if not TEMPLATES:
-        return JSONResponse({"error": "Template cache empty"}, status_code=502)
 
-    query = q.strip().lower()
+    # ---------- Template Fetchers ----------
+    def fetch_imgflip(self) -> List[TemplateItem]:
+        try:
+            r = requests.get("https://api.imgflip.com/get_memes", timeout=10)
+            r.raise_for_status()
+            data = r.json().get("data", {}).get("memes", [])
+            return [TemplateItem(str(d["id"]), d["name"], d["url"], "imgflip") for d in data]
+        except Exception as e:
+            print("⚠️ Imgflip fetch failed:", e)
+            return []
 
-    ALIASES = {
-        "drake": "drake hotline bling",
-        "boyfriend": "distracted boyfriend",
-        "distracted": "distracted boyfriend",
-        "one simply": "one does not simply",
-        "two buttons": "two buttons",
-        "doge": "doge",
-        "pikachu": "surprised pikachu",
-        "gru": "gru plan",
-        "brain": "expanding brain",
-        "arthur": "arthur fist",
-        "change my mind": "change my mind",
-        "leo cheers": "leonardo dicaprio cheers",
-        "success kid": "success kid",
-        "spongebob": "mocking spongebob",
-        "patrick": "surprised patrick",
-    }
-    if query in ALIASES:
-        query = ALIASES[query]
+    def fetch_memegen(self) -> List[TemplateItem]:
+        try:
+            r = requests.get("https://api.memegen.link/templates/", timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            # "id" is slug; "blank" is the empty image URL
+            return [
+                TemplateItem(d["id"], d.get("name", d["id"]), d["blank"], "memegen")
+                for d in data
+                if "id" in d and "blank" in d
+            ]
+        except Exception as e:
+            print("⚠️ Memegen fetch failed:", e)
+            return []
 
-    corpus = []
-    for t in TEMPLATES:
-        name = t.get("name", "")
-        tid = t.get("id", "")
-        searchable = f"{name} {tid}".lower()
-        corpus.append((searchable, t))
+    def fetch_reddit(self) -> List[TemplateItem]:
+        try:
+            r = requests.get("https://meme-api.com/gimme/50", timeout=10)
+            r.raise_for_status()
+            data = r.json().get("memes", [])
+            return [
+                TemplateItem(str(i), d.get("title", "meme"), d.get("url", ""), "reddit")
+                for i, d in enumerate(data)
+                if d.get("url")
+            ]
+        except Exception as e:
+            print("⚠️ Reddit fetch failed:", e)
+            return []
 
-    subs = [t for (text, t) in corpus if query in text]
-    if subs:
+    def _fetch_pool(self) -> List[TemplateItem]:
+        pool: List[TemplateItem] = []
+        pool += self.fetch_imgflip()
+        pool += self.fetch_memegen()
+        pool += self.fetch_reddit()
+        # filter invalid
+        return [p for p in pool if p.url and p.name]
 
-        scored = sorted(
-            [{"id": t["id"], "name": t["name"], "url": t["url"],
-                "score": min(99, 50 + len(query))} for t in subs],
-            key=lambda x: x["score"],
-            reverse=True
-        )[:limit]
-        return {"results": scored}
+    # ---------- Retrieval Core ----------
+    def retrieve(
+        self,
+        search_prompt: str,
+        top_k: int = 10,
+        tags: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Rank templates most semantically similar to the search prompt.
+        Adds a small keyword/tag-overlap bonus to the embedding score.
+        """
+        pool = self._fetch_pool()
+        if not pool or not (search_prompt or "").strip():
+            return []
 
-    from rapidfuzz import process, fuzz
-    names = [f"{t['name']} {t['id']}".lower() for t in TEMPLATES]
-    matches = process.extract(
-        query, names, limit=limit, scorer=fuzz.WRatio, score_cutoff=45)
+        names = [t.name for t in pool]
+        all_texts = names + [search_prompt]
 
-    out = []
-    for _, score, idx in matches:
-        t = TEMPLATES[idx]
-        out.append({"id": t["id"], "name": t["name"],
-                   "url": t["url"], "score": int(score)})
+        # Embeddings with fallback
+        try:
+            vecs_all = openai_embed(all_texts)
+        except Exception as e:
+            print("⚠️ OpenAI embedding error, falling back:", e)
+            vecs_all = fallback_embed(all_texts)
 
-    if not out:
-        out = [{"id": t["id"], "name": t["name"], "url": t["url"], "score": 40}
-               for t in TEMPLATES[:limit]]
+        vecs = vecs_all[:-1]
+        q = vecs_all[-1]
 
-    return {"results": out}
+        # cosine similarity
+        denom = (np.linalg.norm(vecs, axis=1) * (np.linalg.norm(q) + 1e-10)) + 1e-10
+        sims = np.dot(vecs, q) / denom
+
+        # Tag overlap bonus (very small, bounded)
+        tags = [t.lower() for t in (tags or []) if t]
+        bonus = np.zeros_like(sims)
+        if tags:
+            for i, nm in enumerate(names):
+                lo = " " + nm.lower() + " "
+                hits = sum(1 for t in tags if t in lo)
+                if hits:
+                    bonus[i] = 0.05 * min(3, hits)  # up to +0.15
+
+        score = sims + bonus
+        idxs = np.argsort(-score)[:top_k]
+
+        out: List[Dict[str, Any]] = []
+        for i in idxs:
+            t = pool[int(i)]
+            out.append(
+                {
+                    "id": t.id,
+                    "name": t.name,
+                    "url": t.url,
+                    "source": t.source,
+                    "score": float(score[int(i)]),
+                }
+            )
+        return out
+
+    # ---------- Context-first convenience ----------
+    def retrieve_from_context(self, context: str, top_k: int = 10) -> List[Dict[str, Any]]:
+        """
+        Uses OpenAI to plan search terms/tags from raw user context,
+        then calls retrieve(search_prompt, tags).
+        """
+        plan = openai_plan_search(context or "")
+        search_prompt = (plan.get("search_prompt") or context or "").strip()
+        tags = plan.get("tags") or []
+        return self.retrieve(search_prompt=search_prompt, top_k=top_k, tags=tags)
