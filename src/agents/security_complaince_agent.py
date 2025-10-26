@@ -58,3 +58,47 @@ class SecurityComplianceAgent:
             csv.writer(f).writerow(
                 [datetime.datetime.utcnow().isoformat(), status, caption, detail]
             )
+
+# ---------- 1️ OpenAI Moderation ----------
+    def _check_openai_moderation(self, caption: str):
+        """Check caption using the OpenAI moderation API via openai_client."""
+        try:
+            ok, detail = openai_moderate(caption)
+            if not ok:
+                return False, f"openai_flagged ({detail})"
+            return True, "openai_ok"
+        except Exception as e:
+            print("⚠️ OpenAI moderation error:", e)
+            return True, "openai_error"
+
+    # ---------- 2️ Local banned-words ----------
+    def _check_banned(self, caption: str):
+        """Check caption for banned keywords locally."""
+        tokens = re.findall(r"[a-zA-Z']+", caption.lower())
+        hits = sorted({t for t in tokens if t in BANNED})
+        if hits:
+            return False, f"banned terms {hits}"
+        return True, "ok"
+
+    # ---------- 3️ Hugging Face Toxic-BERT ----------
+    def _check_hf_detoxify(self, caption: str, threshold: float = 0.80):
+        """Check caption toxicity using Hugging Face model (unitary/toxic-bert)."""
+        try:
+            url = "https://api-inference.huggingface.co/models/unitary/toxic-bert"
+            headers = {"Content-Type": "application/json"}
+            if HUGGINGFACE_API_TOKEN:
+                headers["Authorization"] = f"Bearer {HUGGINGFACE_API_TOKEN}"  # optional auth
+            r = requests.post(url, headers=headers, json={"inputs": caption}, timeout=15)
+            if not r.ok:
+                return True, "hf_skip"
+
+            data = r.json()
+            scores = [cls.get("score", 0.0) for item in data for cls in item]
+            if scores and max(scores) > threshold:
+                return False, f"toxic score {max(scores):.2f}"
+            return True, "hf_ok"
+        except Exception as e:
+            print("⚠️ HF detoxify error:", e)
+            return True, "hf_error"
+
+
