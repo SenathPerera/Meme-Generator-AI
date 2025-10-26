@@ -50,7 +50,7 @@ async def _get_from_source(idx: int) -> Optional[str]:
                 return j["slip"]["advice"]
 
     return None
-
+#new
 
 @app.get("/get_idea")
 async def get_idea():
