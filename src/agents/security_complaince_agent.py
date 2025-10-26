@@ -100,5 +100,77 @@ class SecurityComplianceAgent:
         except Exception as e:
             print("⚠️ HF detoxify error:", e)
             return True, "hf_error"
+        
+ # ---------- 4️ Google Perspective API ----------
+    def _check_perspective(self, caption: str, threshold: float = 0.80):
+        """Use Google Perspective API to check toxicity, insult, profanity."""
+        try:
+            if not PERSPECTIVE_API_KEY:
+                return True, "perspective_skip"
+
+            url = (
+                f"https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze"
+                f"?key={PERSPECTIVE_API_KEY}"
+            )
+            r = requests.post(
+                url,
+                json={
+                    "comment": {"text": caption},
+                    "requestedAttributes": {
+                        "TOXICITY": {},
+                        "INSULT": {},
+                        "PROFANITY": {},
+                    },
+                    "languages": ["en"],
+                },
+                timeout=15,
+            )
+            if not r.ok:
+                return True, "perspective_err"
+
+            j = r.json()
+            scores = [
+                j["attributeScores"].get(attr, {}).get("summaryScore", {}).get("value", 0.0)
+                for attr in ["TOXICITY", "INSULT", "PROFANITY"]
+            ]
+            if scores and max(scores) > threshold:
+                return False, f"perspective high {max(scores):.2f}"
+            return True, "perspective_ok"
+        except Exception as e:
+            print("⚠️ Perspective API error:", e)
+            return True, "perspective_error"
+
+    # ---------- MAIN COMPLIANCE CHECK ----------
+    def check(self, caption: str) -> ComplianceResult:
+        """Run all security checks and return overall result."""
+
+        # 1️ OpenAI moderation
+        ok, detail = self._check_openai_moderation(caption)
+        if not ok:
+            self._log(caption, "BLOCKED", detail)
+            return ComplianceResult(False, f"Blocked: {detail}")
+
+        # 2️ Local banned words
+        ok, detail = self._check_banned(caption)
+        if not ok:
+            self._log(caption, "BLOCKED", detail)
+            return ComplianceResult(False, f"Blocked: {detail}")
+
+        # 3️ Hugging Face toxicity
+        ok, detail = self._check_hf_detoxify(caption)
+        if not ok:
+            self._log(caption, "BLOCKED", detail)
+            return ComplianceResult(False, f"Blocked: {detail}")
+
+        # 4️ Perspective API
+        ok, detail = self._check_perspective(caption)
+        if not ok:
+            self._log(caption, "BLOCKED", detail)
+            return ComplianceResult(False, f"Blocked: {detail}")
+
+        # Passed all checks
+        self._log(caption, "PASSED", "ok")
+        return ComplianceResult(True, "OK")
+
 
 
