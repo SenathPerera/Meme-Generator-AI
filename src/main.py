@@ -1,0 +1,325 @@
+
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import List, Dict, Optional
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path 
+from src.pipeline import MemePipeline
+from src.utils.config import USE_PAID_API, OPENAI_TEXT_MODEL
+from src.utils.telemetry import get_last_image_provider
+from src.utils.telemetry import set_last_image_provider
+from src.utils.openai_client import openai_plan_search
+from src.agents.meme_idea_agent import plan_from_context as openai_plan_from_context
+from src.agents.meme_generator_agent import generate_from_prompt_and_caption, overlay_text_on_local_image
+
+# Ensure Grok client logs its startup config (mirrors OpenAI logs)
+try:
+    import src.grok_pipeline_client  # triggers one-time GROK CONFIG print on import
+except Exception as _e:
+    print("⚠️ Grok client import failed:", _e)
+
+import webbrowser
+
+app = FastAPI(title="MemeForge AI API", version="1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/outputs", StaticFiles(directory="outputs"), name="outputs")
+
+pipe = MemePipeline()
+mode = "OpenAI Paid Mode" if USE_PAID_API else "Free API Mode"
+print(f"🚀 MemeForge API started ({mode}, model={OPENAI_TEXT_MODEL})")
+
+class TextBox(BaseModel):
+    text: str
+    x: float
+    y: float
+    width: float
+    align: str = "center"
+    font_scale: float = 0.06
+    uppercase: bool = True
+
+class TemplateResponse(BaseModel):
+    id: str
+    name: str
+    url: str
+    caption: str
+
+class GenerateRequest(BaseModel):
+    template: Dict
+    caption: str
+
+class GenerateResponse(BaseModel):
+    path: str
+
+class SmartGenerateResponse(BaseModel):
+    path: str
+    model_used: str
+
+class ComplianceRequest(BaseModel):
+    caption: str
+
+class ComplianceResponse(BaseModel):
+    ok: bool
+    reason: str = ""
+
+class PlanRequest(BaseModel):
+    context: str
+    safety_level: Optional[str] = "safe"
+
+class PlanResponse(BaseModel):
+    image_prompt: str
+    captions: List[str]
+
+class BatchItem(BaseModel):
+    path: str
+    caption: str
+
+class BatchResponse(BaseModel):
+    items: List[BatchItem]
+
+class OverlayRequest(BaseModel):
+    base_path: str
+    caption: str
+
+class SmartGenerateRequest(BaseModel):
+    template: Optional[Dict] = None
+    caption: Optional[str] = None
+    boxes: Optional[List[TextBox]] = None
+    context: Optional[str] = None
+    safety_level: Optional[str] = "safe"
+
+# Helper to route planning between OpenAI and Grok based on model name
+def _route_plan_from_context(context: str, model: str = "openai") -> Dict:
+    if (model or "openai").lower() == "openai":
+        return openai_plan_from_context(context)
+    else:
+        from src.grok_pipeline import plan_from_context as grok_plan_from_context
+        return grok_plan_from_context(context)
+
+@app.get("/")
+def root():
+    return {"message": f"MemeForge AI API running in {mode} 🎉"}
+
+@app.get("/templates", response_model=List[TemplateResponse])
+def get_templates(prompt: str = "", context: str = "", k: int = 6, safety_level: str = "safe"):
+    query = (context or prompt or "").strip()
+    if not query:
+        return []
+
+    model_used = "openai" if (safety_level or "safe").lower() == "safe" else "grok"
+
+    # Plan via selected model to derive lightweight tags when context is present
+    tags: List[str] = []
+    if context:
+        safety_prefix = ""
+        if model_used == "grok":
+            safety_prefix = f"Generate a {safety_level.lower()} meme. "
+        full_context = f"{safety_prefix}{query}"
+        try:
+            plan = _route_plan_from_context(full_context, model=model_used)
+            caps = (plan.get("captions") or [])[:3]
+            words: List[str] = []
+            for c in caps:
+                for w in str(c).split():
+                    w = w.strip().lower().strip(".,!?")
+                    if len(w) >= 4:
+                        words.append(w)
+            seen = set()
+            for w in words:
+                if w not in seen:
+                    seen.add(w)
+                    tags.append(w)
+                if len(tags) >= 6:
+                    break
+            print(f"[templates] using={model_used.upper()} tags={tags}")
+        except Exception as e:
+            print("[templates] planning failed, continuing without tags:", e)
+
+    # Retrieve templates using IR agent
+    templates = pipe.suggest_templates(query, k) if not context else pipe.retriever.retrieve(query, top_k=k, tags=tags)
+
+    results: List[Dict] = []
+    for t in templates:
+        if model_used == "openai":
+            ideas = pipe.auto_captions(query, t["name"])  # OpenAI-heavy suggester
+            cap = ideas[0] if ideas else f"{query} // make it meme"
+        else:
+            try:
+                plan2 = _route_plan_from_context(f"{t['name']} {query}", model=model_used)
+                caps2 = plan2.get("captions") or []
+                cap = str(caps2[0]) if caps2 else f"{query} // make it meme"
+            except Exception:
+                cap = f"{query} // make it meme"
+        results.append({**t, "caption": cap})
+    return results
+
+@app.get("/ideas")
+def get_ideas(prompt: str, template: str, safety_level: str = "safe"):
+    model_used = "openai" if (safety_level or "safe").lower() == "safe" else "grok"
+    if model_used == "openai":
+        return {"ideas": pipe.auto_captions(prompt, template)}
+    try:
+        plan = _route_plan_from_context(f"{template} // {prompt}", model=model_used)
+        return {"ideas": plan.get("captions", [])}
+    except Exception as e:
+        print("[ideas] grok planning failed:", e)
+        return {"ideas": []}
+
+@app.post("/generate", response_model=SmartGenerateResponse)
+def smart_generate(req: SmartGenerateRequest):
+    try:
+        out_dir = Path("outputs")
+        out_dir.mkdir(parents=True, exist_ok=True)
+        model_used = "openai" if (req.safety_level or "safe").lower() == "safe" else "grok"
+
+        # ✅ Safety-level validation
+        VALID_SAFETY_LEVELS = {
+            "safe", "no_filter", "sarcastic", "political", "racist",
+            "dark_humor", "offensive"
+        }
+
+        if req.safety_level not in VALID_SAFETY_LEVELS:
+            raise ValueError(f"Invalid safety_level selected: {req.safety_level}")
+
+        # ✅ Safety-level logic applied only if context exists
+        if req.context:
+            safety_prefix = ""
+            if req.safety_level and req.safety_level.lower() != "safe":
+                # Add a prefix to influence meme/caption style
+                safety_prefix = f"Generate a {req.safety_level.lower()} meme. "
+
+            full_context = f"{safety_prefix}{req.context}"
+            print(f"[planner] using={model_used.upper()} context={full_context}")
+            plan = _route_plan_from_context(full_context, model=model_used)
+
+        # ✅ Free-position text layout rendering (used by editor)
+        if req.template and req.boxes:
+            joined = " ".join([b.text for b in req.boxes if b.text])
+            if (req.safety_level or "safe").lower() == "safe":
+                chk = pipe.compliance.check(joined)
+                if not chk.ok:
+                    raise ValueError(chk.reason)
+            else:
+                print("[compliance] bypassed for non-safe mode (layout)")
+
+            from src.agents.meme_generator_agent import render_layout_on_template
+            out_path = out_dir / f"meme_{req.template.get('id', 'tpl')}_layout.jpg"
+            final_path = render_layout_on_template(
+                req.template, [b.dict() for b in req.boxes], str(out_path)
+            )
+
+            # ✅ Auto-open in browser
+            return {"path": str(final_path), "model_used": model_used}
+
+        # ✅ Legacy single-caption meme generation
+        if req.template and req.caption:
+            if (req.safety_level or "safe").lower() == "safe":
+                chk = pipe.compliance.check(req.caption)
+                if not chk.ok:
+                    raise ValueError(chk.reason)
+            else:
+                print("[compliance] bypassed for non-safe mode (caption)")
+
+            path = pipe.build_meme(
+                req.template,
+                req.caption,
+                out_dir=str(out_dir),
+                enforce_compliance=((req.safety_level or "safe").lower() == "safe")
+            )
+            print(f"[generate] image_provider={get_last_image_provider()} planner_model={model_used}")
+            return {"path": str(path), "model_used": model_used}
+
+        raise ValueError("Provide either {template + boxes[]} or {template + caption}.")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/check", response_model=ComplianceResponse)
+def check_caption(req: ComplianceRequest):
+    res = pipe.check_caption(req.caption)
+    return {"ok": res.ok, "reason": getattr(res, "reason", "")}
+
+@app.get("/status")
+def status():
+    return {
+        "mode": "paid" if USE_PAID_API else "free",
+        "openai_model": OPENAI_TEXT_MODEL,
+        "last_image_provider": get_last_image_provider(),
+        "supported_safety_levels": ["safe", "no_filter", "sarcastic", "political", "racist", "dark_humor", "offensive"]
+    }
+
+@app.post("/plan", response_model=PlanResponse)
+def plan(req: PlanRequest):
+    model_used = "openai" if (req.safety_level or "safe").lower() == "safe" else "grok"
+    print(f"[plan] using={model_used.upper()} context={req.context}")
+    result = _route_plan_from_context(req.context, model=model_used)
+    return PlanResponse(image_prompt=result["image_prompt"], captions=result["captions"])
+
+@app.post("/generate-batch", response_model=BatchResponse)
+def generate_batch(req: SmartGenerateRequest):
+    out_dir = Path("outputs"); out_dir.mkdir(parents=True, exist_ok=True)
+    items: List[Dict] = []
+
+    if req.context and not (req.template and req.caption):
+        model_used = "openai" if (req.safety_level or "safe").lower() == "safe" else "grok"
+        print(f"[batch] using={model_used.upper()} context={req.context}")
+        plan = _route_plan_from_context(req.context, model=model_used)
+        caps = (plan["captions"] or [])[:6]
+        if not caps:
+            caps = ["WHEN REALITY HITS", "POV: MONDAY"]
+        for i, cap in enumerate(caps, 1):
+            if (req.safety_level or "safe").lower() == "safe":
+                chk = pipe.compliance.check(cap)
+                if not chk.ok:
+                    continue
+            else:
+                print("[compliance] bypassed for non-safe mode (batch/context)")
+            out_path = str(out_dir / f"meme_{i}.jpg")
+            path = generate_from_prompt_and_caption(plan["image_prompt"], cap, out_path)
+            items.append({"path": path, "caption": cap})
+        return {"items": items}
+
+    if req.template and req.caption:
+        for i, cap in enumerate(req.caption[:6], 1):
+            if (req.safety_level or "safe").lower() == "safe":
+                chk = pipe.compliance.check(cap)
+                if not chk.ok:
+                    continue
+            else:
+                print("[compliance] bypassed for non-safe mode (batch/template)")
+            out_path = str(out_dir / f"meme_{i}.jpg")
+            path = pipe.build_meme(
+                req.template,
+                cap,
+                out_dir=str(out_dir),
+                enforce_compliance=((req.safety_level or "safe").lower() == "safe")
+            )
+            items.append({"path": path, "caption": cap})
+        return {"items": items}
+
+    raise ValueError("Provide either {context} or {template + caption}.")
+
+@app.post("/overlay", response_model=GenerateResponse)
+def overlay_caption(req: OverlayRequest):
+    if not req.base_path.startswith("outputs/"):
+        raise ValueError("Invalid base_path")
+    out_path = str(Path(req.base_path).with_name(Path(req.base_path).stem + "_recap.jpg"))
+    path = overlay_text_on_local_image(req.base_path, req.caption, out_path)
+    return {"path": path}
+
+
+
+
+
+

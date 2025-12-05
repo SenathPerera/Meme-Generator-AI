@@ -1,0 +1,23 @@
+[
+  {
+    "id": "drake",
+    "name": "Drake Hotline Bling",
+    "tags": ["yes", "no", "preference", "choice"],
+    "image_path": "data/templates/drake.jpg",
+    "default_caption": "Not this // This"
+  },
+  {
+    "id": "two_buttons",
+    "name": "Two Buttons",
+    "tags": ["indecision", "panic", "conflict"],
+    "image_path": "data/templates/two_buttons.jpg",
+    "default_caption": "Deploy now // Fix tests"
+  },
+  {
+    "id": "distracted_bf",
+    "name": "Distracted Boyfriend",
+    "tags": ["jealousy", "choice", "switching"],
+    "image_path": "data/templates/distracted_bf.jpg",
+    "default_caption": "Me // New framework"
+  }
+]

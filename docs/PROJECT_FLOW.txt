@@ -1,0 +1,44 @@
+MemeForge AI — Natural‑Language Project Flow
+
+This project is a full‑stack meme generator. The frontend is a React single‑page app that lets a user enter a context, browse suggested templates, place and edit text, and save the final image. The backend is a FastAPI service that retrieves templates, “plans” captions, renders text onto images, and enforces safety and compliance rules depending on the selected mode.
+
+Startup and configuration
+When the backend process starts, it loads environment variables from .env (see src/utils/config.py). It prints an OpenAI debug line (paid/free mode and model). It also imports the Grok client once on startup so you see a GROK CONFIG block: the chosen model, API URL, and a masked key prefix. If the Grok key or model is wrong, you will see clear errors in the logs (e.g., 404 for an unknown model). These lines are there so you can verify your keys and routing before you even send a request.
+
+How safety controls the whole flow
+The app has two broad operating modes governed by a safety selector:
+1) Safe mode (safety_level == "safe"): All planning (the text/caption part) is handled by OpenAI. Compliance (moderation) is enforced when generating an image. If the text violates the checker, the request is blocked.
+2) Non‑safe modes (no_filter, sarcastic, political, racist, dark_humor, offensive): All planning is delegated to Grok (xAI). To respect the intent of a “non‑safe” selection, compliance is bypassed when actually rendering images — both for single‑image generation and for batch generation. In other words, Grok plans, and the project does not run the local blocking rules for these modes. You will see explicit logs that compliance was bypassed.
+
+What happens when you press Generate on the home page
+1) The frontend sends GET /templates with the typed context and the current safety level. The backend selects a planner based on safety and produces a few lightweight tags from the planner’s captions. Those tags are used by an information‑retrieval agent to rank templates from Imgflip, Memegen, and Reddit. The endpoint also returns a suggested caption for each template: in safe mode it favors the OpenAI captioner; in non‑safe modes it uses Grok captions.
+2) The frontend displays six cards. This project also eagerly renders captioned previews by calling POST /generate for each suggested card. That step simply draws the suggested caption onto the template with Pillow and swaps the card image to the newly created file under outputs/.
+3) When you click Edit on a card, the meme editor opens. Two text boxes are prefilled from the suggested caption (top // bottom). You can drag, resize (via a slider), change alignment, toggle uppercase, and add more boxes by dragging from the right sidebar of ideas.
+4) After you click Generate Meme in the editor, a short ad overlay is shown; once it ends, the app calls POST /generate with either template+boxes or template+caption. In safe mode, the server enforces compliance; in non‑safe modes it bypasses compliance and logs that choice. The final image path is returned and shown, and in the editor flow it also opens in a new tab for convenience.
+
+How planning, captions, and model switching work
+Planning means “turn raw user context into a machine‑friendly image_prompt and a handful of caption candidates.” The backend routes planning strictly by safety level. In safe mode, OpenAI is used; in non‑safe modes, Grok is used. You’ll see [planner] and [plan]/[templates]/[batch] log lines that spell out which model was used and the context length. If Grok replies with a refusal (for example, “sorry, can’t assist”), the system continues with a local fallback plan so you still get templates and captions; we also print a message about the fallback.
+
+How images are actually created
+All rendering is local in this repo, handled by Pillow in src/agents/meme_generator_agent.py. For some flows you can still request a background image from the OpenAI Images API and then overlay text on top, but there is no Grok image generation step — Grok is used only for text planning. The preferred code path is to take the selected template image, wrap the caption into top and bottom blocks, and draw those with a white fill and a black outline.
+
+Emoji and fonts
+Regular Latin text is drawn with an Impact‑like font. For emoji, the renderer splits the text into runs of letters and emoji; letters are drawn with the Impact font while emoji are rendered with an emoji‑capable font when available. If you want full‑color emoji across platforms, you can drop Twemoji PNGs into src/data/emoji with filenames based on Unicode codepoints (e.g., 1f602.png). The code will paste those color images in place of emoji characters during rendering.
+
+Batch generation
+The batch endpoint accepts either a context or a template with multiple captions. If you pass context, the server plans (again using OpenAI in safe mode and Grok otherwise) and iterates through several caption candidates. In safe mode every caption is moderated. In non‑safe modes, the captions are rendered without local moderation, and the logs show that the compliance step was intentionally bypassed.
+
+Where to look when something goes wrong
+• If a Grok call returns 404, the model name is likely invalid — set GROK_MODEL to a single valid token (for example, grok-2-latest or grok-code-fast-1). The logs will show both the URL and the model name that was sent.
+• If you see “Blocked: openai_flagged”, that’s the compliance checker in safe mode; if you meant to allow that content, change the safety selector to a non‑safe option.
+• If you see “[templates] using=OPENAI” on a non‑safe request, check that the frontend is sending safety_level to /templates — it is wired to do so by default in this codebase.
+
+Files worth remembering
+• src/main.py governs the backend API, safety routing, and compliance toggles.
+• src/grok_pipeline_client.py calls xAI and prints request/response logs.
+• src/pipeline.py is a light orchestrator that exposes build_meme with an enforce_compliance flag.
+• src/agents/meme_generator_agent.py does all of the text placement and image composition (including the emoji code paths).
+• frontend/src/App.jsx and frontend/src/components/MemeEditorModal.jsx drive the main UX flows and call the backend.
+
+In short, safe mode routes captions through OpenAI and enforces moderation at image time, while non‑safe modes route captions through Grok and intentionally skip local moderation so you can see the full planned output rendered on the template. Images themselves are created locally with Pillow and saved under outputs/ so they can be served back to the frontend.
+
